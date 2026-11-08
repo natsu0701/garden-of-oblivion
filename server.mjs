@@ -12,11 +12,11 @@ const MAX_NOTES = 400;
 const DAY = 86400000;
 
 const SEEDS = [
-  { id: "seed-1", name: "무명", text: "얼굴보다 손의 온도가 오래 남았다.", days: 26 },
-  { id: "seed-2", name: "지나가던 이", text: "이름을 부르지 말아 달라.", days: 18 },
-  { id: "seed-3", name: "아이", text: "눈이 감겨도 빛은 남아 있었다.", days: 9 },
-  { id: "seed-4", name: "기록 없는 이", text: "나는 여기 서 있었다.", days: 41 },
-  { id: "seed-5", name: "정원", text: "꽃은 누구의 것인지 묻지 않는다.", days: 13 },
+  { id: "seed-1", name: "익명", text: "고생 많았습니다!", days: 2 },
+  { id: "seed-2", name: "익명", text: "와.. 대박이에요", days: 5 },
+  { id: "seed-3", name: "익명", text: "잘 봤습니다", days: 9 },
+  { id: "seed-4", name: "익명", text: "고생 많았다!", days: 14 },
+  { id: "seed-5", name: "익명", text: "스티커 너무 귀여워요", days: 20 },
 ];
 
 const MIME = {
@@ -97,8 +97,14 @@ function createFileStore() {
     async init() {
       await enqueue(async () => {
         const entries = await readAll();
-        if (entries.some((entry) => entry.seed)) return;
-        await writeAll([...seedRows(), ...entries]);
+        const previous = new Map(entries.filter((entry) => entry.seed).map((entry) => [entry.id, entry]));
+        const seeds = seedRows().map((row) => {
+          const prev = previous.get(row.id);
+          if (prev && prev.name === row.name && prev.text === row.text) return prev;
+          return row;
+        });
+        const notes = entries.filter((entry) => !entry.seed);
+        await writeAll([...notes, ...seeds]);
       });
     },
     async list(ownerHash) {
@@ -156,13 +162,12 @@ function createPgStore(pool) {
       await pool.query(`
         CREATE INDEX IF NOT EXISTS entries_created_idx ON entries (created_at DESC)
       `);
-      const found = await pool.query("SELECT COUNT(*)::int AS n FROM entries WHERE seed = TRUE");
-      if (found.rows[0].n > 0) return;
       for (const row of seedRows()) {
         await pool.query(
           `INSERT INTO entries (id, name, body, created_at, owner_hash, seed)
            VALUES ($1, $2, $3, $4, $5, TRUE)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE
+             SET name = EXCLUDED.name, body = EXCLUDED.body`,
           [row.id, row.name, row.text, row.at, row.ownerHash]
         );
       }

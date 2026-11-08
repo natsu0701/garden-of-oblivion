@@ -451,7 +451,8 @@ body.is-reading .world {
   mask-image: linear-gradient(#000 68%, transparent 98%);
 }
 
-.sky.is-dragging {
+.sky.is-dragging,
+.sky.is-gliding {
   cursor: grabbing;
   scroll-snap-type: none;
   user-select: none;
@@ -698,6 +699,7 @@ dialog::backdrop {
 }
 
 .sheet-form {
+  position: relative;
   width: min(440px, 88vw);
   max-height: min(78dvh, 680px);
   overflow: auto;
@@ -705,6 +707,28 @@ dialog::backdrop {
   background: linear-gradient(165deg, #f4ecde 0%, #e4d8c4 100%);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   color: #241c16;
+}
+
+.sheet-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #241c16;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.sheet-close:hover,
+.sheet-close:focus-visible {
+  opacity: 0.5;
 }
 
 .sheet-form::before {

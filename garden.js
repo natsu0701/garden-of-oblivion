@@ -6,11 +6,11 @@
 
   const now = Date.now();
   const SEEDS = [
-    { id: "seed-1", name: "무명", text: "얼굴보다 손의 온도가 오래 남았다.", at: now - 26 * DAY },
-    { id: "seed-2", name: "지나가던 이", text: "이름을 부르지 말아 달라.", at: now - 18 * DAY },
-    { id: "seed-3", name: "아이", text: "눈이 감겨도 빛은 남아 있었다.", at: now - 9 * DAY },
-    { id: "seed-4", name: "기록 없는 이", text: "나는 여기 서 있었다.", at: now - 41 * DAY },
-    { id: "seed-5", name: "정원", text: "꽃은 누구의 것인지 묻지 않는다.", at: now - 13 * DAY },
+    { id: "seed-1", name: "익명", text: "고생 많았습니다!", at: now - 2 * DAY },
+    { id: "seed-2", name: "익명", text: "와.. 대박이에요", at: now - 5 * DAY },
+    { id: "seed-3", name: "익명", text: "잘 봤습니다", at: now - 9 * DAY },
+    { id: "seed-4", name: "익명", text: "고생 많았다!", at: now - 14 * DAY },
+    { id: "seed-5", name: "익명", text: "스티커 너무 귀여워요", at: now - 20 * DAY },
   ];
 
   const $ = (id) => document.getElementById(id);
@@ -84,7 +84,7 @@
   }
 
   function applyCopy() {
-    colophon.textContent = savedOnServer ? "남긴 말은 정원에 남는다." : "남긴 말은 이 기기에 머문다.";
+    colophon.textContent = "저희 작품을 봐주셔서 감사합니다.";
   }
 
   async function fetchEntries() {
@@ -287,6 +287,7 @@
     readWho.textContent = entry.name;
     readWhen.textContent = whenLabel(entry.at);
     readRemove.hidden = !entry.own;
+    readRemove.closest(".acts").hidden = !entry.own;
     readRemove.dataset.armed = "";
     readRemove.textContent = "거두어 가다";
     document.body.classList.add("is-reading");
@@ -371,7 +372,8 @@
 
   $("read-close").addEventListener("click", () => reading.close());
   reading.addEventListener("click", (event) => {
-    if (event.target === reading) reading.close();
+    const sheet = reading.querySelector(".sheet-form");
+    if (!sheet || !sheet.contains(event.target)) reading.close();
   });
   reading.addEventListener("close", () => {
     document.body.classList.remove("is-reading");
@@ -429,21 +431,54 @@
 
   let drag = null;
   let blockClick = false;
-  let glideFrame = 0;
+  let motion = 0;
+  let glide = null;
 
-  function stopGlide() {
-    if (!glideFrame) return;
-    window.cancelAnimationFrame(glideFrame);
-    glideFrame = 0;
+  function easeInOut(t) {
+    const x = Math.min(1, Math.max(0, t));
+    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  }
+
+  function stopMotion() {
+    if (motion) window.cancelAnimationFrame(motion);
+    motion = 0;
+    glide = null;
+    sky.classList.remove("is-gliding");
+  }
+
+  function stepMotion(now) {
+    if (drag && drag.moved) {
+      const gap = drag.target - sky.scrollLeft;
+      sky.scrollLeft += gap * (Math.abs(gap) > 80 ? 0.22 : 0.34);
+      motion = window.requestAnimationFrame(stepMotion);
+      return;
+    }
+    if (!glide) {
+      motion = 0;
+      return;
+    }
+    const t = Math.min(1, (now - glide.start) / glide.duration);
+    sky.scrollLeft = glide.from + (glide.to - glide.from) * easeInOut(t);
+    if (t < 1) {
+      motion = window.requestAnimationFrame(stepMotion);
+      return;
+    }
+    glide = null;
+    motion = 0;
+    sky.classList.remove("is-gliding");
+  }
+
+  function ensureMotion() {
+    if (!motion) motion = window.requestAnimationFrame(stepMotion);
   }
 
   sky.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    stopGlide();
+    stopMotion();
     drag = {
       id: event.pointerId,
       x: event.clientX,
-      scroll: sky.scrollLeft,
+      target: sky.scrollLeft,
       moved: false,
       lastX: event.clientX,
       lastT: performance.now(),
@@ -457,38 +492,53 @@
     if (!drag.moved && Math.abs(dx) < 8) return;
     if (!drag.moved) {
       drag.moved = true;
+      drag.x = event.clientX;
+      drag.target = sky.scrollLeft;
+      drag.lastX = event.clientX;
+      drag.lastT = performance.now();
       sky.classList.add("is-dragging");
       if (sky.setPointerCapture) sky.setPointerCapture(event.pointerId);
+      ensureMotion();
+      return;
     }
     const now = performance.now();
     const dt = Math.max(now - drag.lastT, 1);
     drag.velocity = (event.clientX - drag.lastX) / dt;
+    drag.target -= event.clientX - drag.lastX;
     drag.lastX = event.clientX;
     drag.lastT = now;
-    sky.scrollLeft = drag.scroll - dx;
   });
 
   function endDrag(event) {
     if (!drag || event.pointerId !== drag.id) return;
     const moved = drag.moved;
-    let velocity = drag.velocity;
+    const velocity = drag.velocity;
+    const from = sky.scrollLeft;
+    const remaining = drag.target - from;
     drag = null;
     sky.classList.remove("is-dragging");
-    if (moved) blockClick = true;
-    if (!moved || Math.abs(velocity) < 0.05) return;
-    let last = performance.now();
-    const step = (now) => {
-      const dt = Math.min(32, now - last);
-      last = now;
-      velocity *= Math.pow(0.92, dt / 16);
-      if (Math.abs(velocity) < 0.02) {
-        glideFrame = 0;
-        return;
-      }
-      sky.scrollLeft -= velocity * dt;
-      glideFrame = window.requestAnimationFrame(step);
+    if (!moved) return;
+    blockClick = true;
+    if (reduce) {
+      sky.scrollLeft = from + remaining;
+      stopMotion();
+      return;
+    }
+    const carry = -velocity * 380;
+    const to = from + remaining + carry;
+    const distance = Math.abs(to - from);
+    if (distance < 12) {
+      stopMotion();
+      return;
+    }
+    glide = {
+      from,
+      to,
+      start: performance.now(),
+      duration: Math.min(920, Math.max(480, distance * 1.15)),
     };
-    glideFrame = window.requestAnimationFrame(step);
+    sky.classList.add("is-gliding");
+    ensureMotion();
   }
 
   sky.addEventListener("pointerup", endDrag);
