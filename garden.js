@@ -17,7 +17,6 @@
   const world = $("world");
   const sky = $("sky");
   const cluster = $("cluster");
-  const dock = $("dock");
   const invite = $("invite");
   const voidEl = $("void");
   const lamp = $("lamp");
@@ -217,29 +216,21 @@
   function render(options = {}) {
     const { arriveId = null, recenter = false } = options;
     const sorted = entries.slice().sort((a, b) => b.at - a.at);
-    const limit = isNarrow() ? 8 : 12;
-    const hanging = sorted.slice(0, limit);
-    const sunk = sorted.slice(limit);
+    const hanging = sorted;
+    const sunk = [];
 
     const keptScroll = sky.scrollLeft;
     cluster.replaceChildren();
-    if (isNarrow()) {
-      hanging.forEach((entry) => cluster.append(makeHang(entry, entry.id === arriveId)));
-      dock.replaceChildren(invite);
-    } else {
-      const left = [];
-      const right = [];
-      hanging.forEach((entry, index) => (index % 2 === 0 ? right : left).push(entry));
-      left.reverse();
-      left.forEach((entry) => cluster.append(makeHang(entry, entry.id === arriveId)));
-      const gap = document.createElement("span");
-      gap.className = "sky-gap";
-      gap.setAttribute("aria-hidden", "true");
-      gap.append(invite);
-      cluster.append(gap);
-      right.forEach((entry) => cluster.append(makeHang(entry, entry.id === arriveId)));
-      dock.replaceChildren();
-    }
+    const left = [];
+    const right = [];
+    hanging.forEach((entry, index) => (index % 2 === 0 ? right : left).push(entry));
+    left.reverse();
+    left.forEach((entry) => cluster.append(makeHang(entry, entry.id === arriveId)));
+    const center = document.createElement("span");
+    center.className = "sky-center";
+    center.setAttribute("aria-hidden", "true");
+    cluster.append(center);
+    right.forEach((entry) => cluster.append(makeHang(entry, entry.id === arriveId)));
 
     sunkenOpen.hidden = sunk.length === 0;
     sunkenCount.textContent = sunk.length ? String(sunk.length) : "";
@@ -267,9 +258,7 @@
       requestAnimationFrame(() => {
         const target = arriveId
           ? cluster.querySelector(`[data-id="${CSS.escape(arriveId)}"]`)
-          : isNarrow()
-            ? cluster.querySelector(".hang")
-            : cluster.querySelector(".sky-gap");
+          : cluster.querySelector(".sky-center");
         scrollToCenter(target, Boolean(arriveId) && !reduce);
       });
     } else if (keptScroll) {
@@ -437,6 +426,84 @@
   });
 
   invite.addEventListener("click", openPaper);
+
+  let drag = null;
+  let blockClick = false;
+  let glideFrame = 0;
+
+  function stopGlide() {
+    if (!glideFrame) return;
+    window.cancelAnimationFrame(glideFrame);
+    glideFrame = 0;
+  }
+
+  sky.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    stopGlide();
+    drag = {
+      id: event.pointerId,
+      x: event.clientX,
+      scroll: sky.scrollLeft,
+      moved: false,
+      lastX: event.clientX,
+      lastT: performance.now(),
+      velocity: 0,
+    };
+  });
+
+  sky.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) < 8) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      sky.classList.add("is-dragging");
+      if (sky.setPointerCapture) sky.setPointerCapture(event.pointerId);
+    }
+    const now = performance.now();
+    const dt = Math.max(now - drag.lastT, 1);
+    drag.velocity = (event.clientX - drag.lastX) / dt;
+    drag.lastX = event.clientX;
+    drag.lastT = now;
+    sky.scrollLeft = drag.scroll - dx;
+  });
+
+  function endDrag(event) {
+    if (!drag || event.pointerId !== drag.id) return;
+    const moved = drag.moved;
+    let velocity = drag.velocity;
+    drag = null;
+    sky.classList.remove("is-dragging");
+    if (moved) blockClick = true;
+    if (!moved || Math.abs(velocity) < 0.05) return;
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(32, now - last);
+      last = now;
+      velocity *= Math.pow(0.92, dt / 16);
+      if (Math.abs(velocity) < 0.02) {
+        glideFrame = 0;
+        return;
+      }
+      sky.scrollLeft -= velocity * dt;
+      glideFrame = window.requestAnimationFrame(step);
+    };
+    glideFrame = window.requestAnimationFrame(step);
+  }
+
+  sky.addEventListener("pointerup", endDrag);
+  sky.addEventListener("pointercancel", endDrag);
+  sky.addEventListener(
+    "click",
+    (event) => {
+      if (!blockClick) return;
+      blockClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    true
+  );
+
   narrowQuery.addEventListener("change", () => render({ recenter: true }));
 
   window.setInterval(() => {

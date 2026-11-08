@@ -373,11 +373,11 @@ body.is-reading .world {
   position: absolute;
   z-index: 6;
   top: 14px;
-  left: 7vw;
-  right: 7vw;
+  left: 0;
+  right: 0;
   height: 1px;
   pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(198, 168, 112, 0.55), transparent);
+  background: linear-gradient(90deg, transparent, rgba(198, 168, 112, 0.55) 12% 88%, transparent);
 }
 
 .mark {
@@ -442,10 +442,19 @@ body.is-reading .world {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  cursor: grab;
+  touch-action: none;
+  scroll-snap-type: x proximity;
   opacity: 0;
   transition: opacity 1.8s ease 0.2s;
   -webkit-mask-image: linear-gradient(#000 68%, transparent 98%);
   mask-image: linear-gradient(#000 68%, transparent 98%);
+}
+
+.sky.is-dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+  user-select: none;
 }
 
 .sky::-webkit-scrollbar {
@@ -464,12 +473,42 @@ body.is-reading .world {
   width: max-content;
   min-width: 100%;
   min-height: 100%;
-  padding: 14px 8vw 0;
+  padding: 14px max(8vw, calc(50% - 40px)) 0;
 }
 
-.sky-gap {
+.sky-center {
   flex: none;
-  width: 96px;
+  width: 0;
+}
+
+.leave {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  top: 54%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 14px 28px;
+  border: 1px solid rgba(138, 98, 52, 0.55);
+  background: #f3ead8;
+  color: #241c16;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.is-settled .leave {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 1.4s ease 0.12s, filter 0.2s ease;
+}
+
+.leave:hover,
+.leave:focus-visible {
+  filter: brightness(1.06);
 }
 
 .hang {
@@ -518,23 +557,17 @@ body.is-reading .world {
   animation-delay: var(--delay, 0s);
 }
 
-.hang:not(.hang-invite) .sheet {
+.hang .sheet {
   height: var(--h, 220px);
   padding: 8px 6px 10px;
 }
 
-.hang-invite .thread {
-  height: 28px;
+.hang {
+  scroll-snap-align: center;
 }
 
-.hang-invite .sheet {
-  width: 56px;
-  min-height: 168px;
-  padding: 16px 6px 14px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.4), transparent 42%),
-    #f3ead8;
-  animation: sway var(--dur, 8.5s) ease-in-out infinite, invite-glow 5.2s ease-in-out infinite;
+.sky.is-dragging .sheet {
+  animation-play-state: paused;
 }
 
 .body {
@@ -546,7 +579,7 @@ body.is-reading .world {
   font-weight: 400;
 }
 
-.hang:not(.hang-invite) .body {
+.hang .body {
   flex: 1 1 auto;
   width: 1.35em;
   min-height: 0;
@@ -554,13 +587,6 @@ body.is-reading .world {
   word-break: keep-all;
   -webkit-mask-image: linear-gradient(#000 72%, transparent);
   mask-image: linear-gradient(#000 72%, transparent);
-}
-
-.hang-invite .body {
-  letter-spacing: 0.28em;
-  font-size: 14px;
-  font-weight: 500;
-  padding-top: 0.28em;
 }
 
 .who {
@@ -588,16 +614,6 @@ body.is-reading .world {
 
 .hang.is-new {
   animation: arrive 1s cubic-bezier(0.16, 0.84, 0.24, 1) both;
-}
-
-@keyframes invite-glow {
-  0%,
-  100% {
-    filter: brightness(1);
-  }
-  50% {
-    filter: brightness(1.07);
-  }
 }
 
 @keyframes sway {
@@ -667,10 +683,6 @@ body.is-reading .world {
 
 .is-settled .sunken-open:not([hidden]) {
   opacity: 1;
-}
-
-.dock {
-  display: none;
 }
 
 dialog {
@@ -901,14 +913,11 @@ dialog::backdrop {
 
   .wire {
     top: 10px;
-    left: 8vw;
-    right: 8vw;
   }
 
   .sky {
     top: 8px;
     height: 36vh;
-    scroll-snap-type: x mandatory;
     -webkit-mask-image: linear-gradient(#000 86%, transparent),
       linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
     mask-image: linear-gradient(#000 86%, transparent),
@@ -918,16 +927,18 @@ dialog::backdrop {
   }
 
   .cluster {
-    justify-content: flex-start;
     gap: 22px;
-    padding: 8px calc(50% - 34px) 0;
+    padding: 8px max(18px, calc(50% - 36px)) 0;
   }
 
-  .hang {
-    scroll-snap-align: center;
+  .leave {
+    top: 58%;
+    padding: 13px 22px;
+    font-size: 15px;
+    letter-spacing: 0.16em;
   }
 
-  .hang:not(.hang-invite) .sheet {
+  .hang .sheet {
     width: 52px;
     height: 210px;
     padding: 10px 6px 8px;
@@ -944,7 +955,7 @@ dialog::backdrop {
   }
 
   .mark {
-    bottom: calc(78px + env(safe-area-inset-bottom));
+    bottom: calc(16px + env(safe-area-inset-bottom));
     width: 92vw;
   }
 
@@ -972,53 +983,10 @@ dialog::backdrop {
     line-height: 1.45;
   }
 
-  .dock {
-    display: flex;
-    position: absolute;
-    z-index: 8;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    justify-content: center;
-    padding: 0 18px calc(12px + env(safe-area-inset-bottom));
-    pointer-events: none;
-    opacity: 0;
-  }
-
-  .is-settled .dock {
-    opacity: 1;
-    pointer-events: auto;
-    transition: opacity 1.4s ease 0.1s;
-  }
-
-  .dock .hang-invite {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .dock .hang-invite .thread {
-    display: none;
-  }
-
-  .dock .hang-invite .sheet {
-    width: auto;
-    min-height: 0;
-    padding: 12px 18px;
-    animation: none;
-  }
-
-  .dock .hang-invite .body {
-    writing-mode: horizontal-tb;
-    padding-top: 0;
-    font-size: 15px;
-    letter-spacing: 0.22em;
-  }
-
   .sunken-open {
     left: 14px;
     right: auto;
-    bottom: calc(86px + env(safe-area-inset-bottom));
+    bottom: calc(16px + env(safe-area-inset-bottom));
     z-index: 8;
     min-height: 44px;
   }
@@ -1078,6 +1046,7 @@ dialog::backdrop {
   .world,
   .mark,
   .sky,
+  .leave,
   .colophon,
   .sunken-open,
   .grain,
