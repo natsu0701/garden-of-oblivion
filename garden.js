@@ -268,7 +268,7 @@
 
   function openPaper() {
     returnFocus = invite;
-    formError.textContent = "비어 있는 말은 걸 수 없다.";
+    formError.textContent = "아직 비어있는 항목이 있습니다.";
     formError.hidden = true;
     nameInput.classList.remove("is-invalid");
     textInput.classList.remove("is-invalid");
@@ -313,7 +313,7 @@
     nameInput.classList.toggle("is-invalid", !name);
     textInput.classList.toggle("is-invalid", !text);
     if (!name || !text) {
-      formError.textContent = "비어 있는 말은 걸 수 없다.";
+      formError.textContent = "아직 비어있는 항목이 있습니다.";
       formError.hidden = false;
       (name ? textInput : nameInput).focus();
       return;

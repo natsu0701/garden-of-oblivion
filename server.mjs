@@ -365,7 +365,7 @@ const server = createServer(async (req, res) => {
       const name = cleanField(body.name, 10);
       const text = cleanField(body.text, 60);
       if (!name || !text) {
-        send(res, 400, { error: "비어 있는 말은 걸 수 없다." });
+        send(res, 400, { error: "아직 비어있는 항목이 있습니다." });
         return;
       }
       const entry = await store.add({ name, text, ownerHash });
