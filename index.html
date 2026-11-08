@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="망각의 정원 전시 방명록. 검은 화면 뒤에 정원이 열리고, 남긴 말은 종이로 걸렸다가 천천히 가라앉는다."
+    />
+    <title>망각의 정원 — 방명록</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%23000' width='16' height='16'/%3E%3Ccircle cx='8' cy='8' r='2.4' fill='none' stroke='%23cbb892' stroke-width='0.8'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="garden.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+
+    <div class="lids" aria-hidden="true">
+      <div class="lid lid-top"></div>
+      <div class="lid lid-bottom"></div>
+    </div>
+
+    <div class="void" id="void">
+      <p class="void-line">이름이 닿기 전에.</p>
+      <button class="void-skip" id="void-skip" type="button">눌러 지나간다</button>
+    </div>
+
+    <main class="stage" id="stage">
+      <div class="gate" aria-hidden="true">
+        <img src="assets/poster.jpg" alt="" />
+      </div>
+
+      <div class="world" id="world">
+        <img class="layer layer-palm" src="assets/palm.jpg" alt="" />
+        <img class="layer layer-eyes" src="assets/eyes.jpg" alt="" />
+        <img class="layer layer-boys" src="assets/boys.jpg" alt="" />
+        <img class="layer layer-line" src="assets/deity-line.png" alt="" />
+        <img class="layer layer-deity" src="assets/deity.png" alt="" />
+        <img class="layer layer-fighter" src="assets/fighter.jpg" alt="" />
+        <div class="peonies" aria-hidden="true"></div>
+        <div class="vignette" aria-hidden="true"></div>
+        <div class="lamp" id="lamp" aria-hidden="true"></div>
+
+        <header class="mark">
+          <p class="mark-kicker">전시 방명록</p>
+          <h1>
+            <img src="assets/letters.png" alt="망각의 정원" />
+          </h1>
+          <p class="mark-note">남겨진 말은 천천히 가라앉는다.</p>
+          <p class="colophon" id="colophon">남긴 말은 이 기기에 머문다.</p>
+        </header>
+
+        <div class="wire" aria-hidden="true"></div>
+
+        <section class="sky" id="sky" aria-label="걸려 있는 말">
+          <div class="cluster" id="cluster"></div>
+        </section>
+
+        <button class="hang hang-invite" id="invite" type="button">
+          <span class="thread" aria-hidden="true"></span>
+          <span class="ring" aria-hidden="true"></span>
+          <span class="sheet">
+            <span class="body">말을 걸다</span>
+          </span>
+        </button>
+
+        <div class="dock" id="dock"></div>
+        <button class="sunken-open" id="sunken-open" type="button" hidden>
+          가라앉은 말 <span id="sunken-count"></span>
+        </button>
+      </div>
+    </main>
+
+    <dialog class="paper" id="paper" aria-labelledby="paper-title">
+      <form class="sheet-form" id="leave-form">
+        <h2 id="paper-title">방명록</h2>
+        <label class="field">
+          <span>이름</span>
+          <input id="name-input" name="name" type="text" maxlength="10" autocomplete="nickname" spellcheck="false" placeholder="익명도 괜찮습니다." />
+        </label>
+        <label class="field">
+          <span>전하고 싶은 말 <em class="count" id="count">60</em></span>
+          <textarea id="text-input" name="text" maxlength="60" rows="3" spellcheck="false"></textarea>
+        </label>
+        <p class="form-error" id="form-error" hidden>비어 있는 말은 걸 수 없다.</p>
+        <div class="acts">
+          <button class="act act-quiet" id="paper-cancel" type="button">취소</button>
+          <button class="act" type="submit">올리기</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="reading" id="reading" aria-labelledby="read-kicker">
+      <article class="sheet-form">
+        <h2 id="read-kicker">걸려 있던 말</h2>
+        <p class="read-text" id="read-text"></p>
+        <p class="read-who" id="read-who"></p>
+        <p class="read-when" id="read-when"></p>
+        <div class="acts">
+          <button class="act" id="read-close" type="button">돌려 놓기</button>
+          <button class="act act-quiet" id="read-remove" type="button" hidden>거두어 가다</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog class="sunken" id="sunken" aria-labelledby="sunken-title">
+      <div class="sheet-form">
+        <h2 id="sunken-title">아래로 내려앉은 말</h2>
+        <ul class="s-list" id="sunken-list"></ul>
+        <div class="acts">
+          <button class="act" id="sunken-close" type="button">닫다</button>
+        </div>
+      </div>
+    </dialog>
+
+    <p class="sr-only" id="live" aria-live="polite"></p>
+    <script src="garden.js" defer></script>
+  </body>
+</html>
