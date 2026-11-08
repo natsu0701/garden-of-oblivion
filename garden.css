@@ -451,8 +451,7 @@ body.is-reading .world {
   mask-image: linear-gradient(#000 68%, transparent 98%);
 }
 
-.sky.is-dragging,
-.sky.is-gliding {
+.sky.is-dragging {
   cursor: grabbing;
   scroll-snap-type: none;
   user-select: none;
@@ -908,31 +907,80 @@ dialog::backdrop {
 
 @media (max-width: 839px) {
   .layer-palm {
-    opacity: 0.1;
+    inset: 8vh 0 auto;
+    width: 100%;
+    height: auto;
+    max-height: 62vh;
+    object-fit: contain;
+    object-position: center center;
+    opacity: 0.16;
+    transform: none;
   }
 
   .layer-deity {
-    height: 62vh;
-    left: -28vw;
-    bottom: 6vh;
-    opacity: 0.88;
+    width: auto;
+    height: 48vh;
+    max-width: 78vw;
+    left: 0;
+    right: auto;
+    bottom: 22vh;
+    object-fit: contain;
+    object-position: left center;
+    opacity: 0.94;
+    transform: none;
   }
 
-  .layer-line,
-  .layer-fighter,
-  .layer-boys {
-    display: none;
+  .layer-line {
+    display: block;
+    width: auto;
+    height: 36vh;
+    max-width: 46vw;
+    left: 0;
+    bottom: 24vh;
+    opacity: 0.3;
+    transform: none;
   }
 
   .layer-eyes {
-    width: 78vw;
-    right: -28vw;
-    top: -2vh;
-    opacity: 0.32;
+    width: min(58vw, 260px);
+    height: auto;
+    right: 0;
+    top: 30vh;
+    opacity: 0.42;
+    transform: none;
+  }
+
+  .layer-boys {
+    display: block;
+    width: min(34vw, 160px);
+    height: auto;
+    right: 2vw;
+    top: 42vh;
+    opacity: 0.42;
+    transform: none;
+  }
+
+  .layer-fighter {
+    display: block;
+    width: min(30vw, 140px);
+    height: auto;
+    right: 3vw;
+    bottom: 20vh;
+    opacity: 0.78;
+    transform: none;
+  }
+
+  .layer-eyes,
+  .layer-boys,
+  .layer-fighter {
+    -webkit-mask-image: linear-gradient(#000 0 86%, transparent);
+    mask-image: linear-gradient(#000 0 86%, transparent);
   }
 
   .peonies {
-    height: 16vh;
+    height: 14vw;
+    background-size: 100% auto;
+    background-position: center bottom;
   }
 
   .wire {
@@ -1037,7 +1085,8 @@ dialog::backdrop {
   }
 
   .gate img {
-    object-position: center 16%;
+    object-fit: contain;
+    object-position: center center;
   }
 
   .void-line {

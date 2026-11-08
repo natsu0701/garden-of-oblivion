@@ -431,54 +431,21 @@
 
   let drag = null;
   let blockClick = false;
-  let motion = 0;
-  let glide = null;
+  let coast = 0;
 
-  function easeInOut(t) {
-    const x = Math.min(1, Math.max(0, t));
-    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
-  }
-
-  function stopMotion() {
-    if (motion) window.cancelAnimationFrame(motion);
-    motion = 0;
-    glide = null;
-    sky.classList.remove("is-gliding");
-  }
-
-  function stepMotion(now) {
-    if (drag && drag.moved) {
-      const gap = drag.target - sky.scrollLeft;
-      sky.scrollLeft += gap * (Math.abs(gap) > 80 ? 0.22 : 0.34);
-      motion = window.requestAnimationFrame(stepMotion);
-      return;
-    }
-    if (!glide) {
-      motion = 0;
-      return;
-    }
-    const t = Math.min(1, (now - glide.start) / glide.duration);
-    sky.scrollLeft = glide.from + (glide.to - glide.from) * easeInOut(t);
-    if (t < 1) {
-      motion = window.requestAnimationFrame(stepMotion);
-      return;
-    }
-    glide = null;
-    motion = 0;
-    sky.classList.remove("is-gliding");
-  }
-
-  function ensureMotion() {
-    if (!motion) motion = window.requestAnimationFrame(stepMotion);
+  function stopCoast() {
+    if (!coast) return;
+    window.cancelAnimationFrame(coast);
+    coast = 0;
   }
 
   sky.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    stopMotion();
+    stopCoast();
     drag = {
       id: event.pointerId,
       x: event.clientX,
-      target: sky.scrollLeft,
+      scroll: sky.scrollLeft,
       moved: false,
       lastX: event.clientX,
       lastT: performance.now(),
@@ -493,52 +460,43 @@
     if (!drag.moved) {
       drag.moved = true;
       drag.x = event.clientX;
-      drag.target = sky.scrollLeft;
+      drag.scroll = sky.scrollLeft;
       drag.lastX = event.clientX;
       drag.lastT = performance.now();
       sky.classList.add("is-dragging");
       if (sky.setPointerCapture) sky.setPointerCapture(event.pointerId);
-      ensureMotion();
       return;
     }
     const now = performance.now();
     const dt = Math.max(now - drag.lastT, 1);
     drag.velocity = (event.clientX - drag.lastX) / dt;
-    drag.target -= event.clientX - drag.lastX;
     drag.lastX = event.clientX;
     drag.lastT = now;
+    sky.scrollLeft = drag.scroll - (event.clientX - drag.x);
   });
 
   function endDrag(event) {
     if (!drag || event.pointerId !== drag.id) return;
     const moved = drag.moved;
-    const velocity = drag.velocity;
-    const from = sky.scrollLeft;
-    const remaining = drag.target - from;
+    let velocity = drag.velocity;
     drag = null;
     sky.classList.remove("is-dragging");
     if (!moved) return;
     blockClick = true;
-    if (reduce) {
-      sky.scrollLeft = from + remaining;
-      stopMotion();
-      return;
-    }
-    const carry = -velocity * 380;
-    const to = from + remaining + carry;
-    const distance = Math.abs(to - from);
-    if (distance < 12) {
-      stopMotion();
-      return;
-    }
-    glide = {
-      from,
-      to,
-      start: performance.now(),
-      duration: Math.min(920, Math.max(480, distance * 1.15)),
+    if (reduce || Math.abs(velocity) < 0.04) return;
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(32, now - last);
+      last = now;
+      velocity *= Math.pow(0.86, dt / 16);
+      if (Math.abs(velocity) < 0.02) {
+        coast = 0;
+        return;
+      }
+      sky.scrollLeft -= velocity * dt;
+      coast = window.requestAnimationFrame(step);
     };
-    sky.classList.add("is-gliding");
-    ensureMotion();
+    coast = window.requestAnimationFrame(step);
   }
 
   sky.addEventListener("pointerup", endDrag);
