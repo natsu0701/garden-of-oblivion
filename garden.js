@@ -40,12 +40,21 @@
   const readRemove = $("read-remove");
   const submitBtn = form.querySelector('button[type="submit"]');
 
+  const pageUrl = new URL(document.baseURI);
+  const staticHost = /(^|\.)github\.io$/i.test(pageUrl.hostname);
+
   let returnFocus = invite;
   let readingEntry = null;
   let savedOnServer = false;
-  let shareMode = false;
+  // GitHub Pages has no API. Asking for /api/entries only prints a 404 in the browser.
+  let shareMode = staticHost;
   let entries = [];
   let sending = false;
+  let ready = Promise.resolve();
+
+  function apiUrl(path) {
+    return new URL(String(path).replace(/^\//, ""), pageUrl).href;
+  }
 
   function isNarrow() {
     return narrowQuery.matches;
@@ -104,22 +113,30 @@
     return list.map((entry) => normalize({ ...entry, own: false })).filter((entry) => entry && !entry.id.startsWith("seed-"));
   }
 
-  async function writeShared(notes) {
-    const payload = notes
-      .filter((entry) => entry && !String(entry.id).startsWith("seed-"))
+  function packShared(notes) {
+    const byId = new Map();
+    for (const entry of notes) {
+      const clean = normalize(entry);
+      if (!clean || clean.id.startsWith("seed-")) continue;
+      byId.set(clean.id, clean);
+    }
+    return [...byId.values()]
       .sort((a, b) => b.at - a.at)
       .slice(0, 400)
       .map(({ id, name, text, at }) => ({ id, name, text, at }));
+  }
+
+  async function writeShared(notes) {
     const res = await fetch(SHARE_URL, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ entries: payload }),
+      body: JSON.stringify({ entries: packShared(notes) }),
     });
     if (!res.ok) throw new Error("share");
   }
 
   async function fetchServerEntries() {
-    const res = await fetch("/api/entries", { headers: { accept: "application/json" } });
+    const res = await fetch(apiUrl("api/entries"), { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
     if (!data || data.saved !== true || !Array.isArray(data.entries)) throw new Error("shape");
@@ -141,18 +158,26 @@
 
   async function postShared(name, text) {
     const entry = { id: idOf(), name, text, at: Date.now(), own: true };
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const current = (await readSharedNotes()).filter((item) => item.id !== entry.id);
-      await writeShared([entry, ...current]);
+    let carried = [];
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await readSharedNotes();
+      const merged = packShared([...carried, ...current, entry]);
+      await writeShared(merged);
       const seen = await readSharedNotes();
-      if (seen.some((item) => item.id === entry.id)) return entry;
+      const seenIds = new Set(seen.map((item) => item.id));
+      if (!seenIds.has(entry.id)) {
+        carried = merged;
+        continue;
+      }
+      carried = merged.filter((item) => !seenIds.has(item.id));
+      if (!carried.length) return entry;
     }
     throw new Error("share");
   }
 
   async function postEntry(name, text) {
     if (shareMode) return postShared(name, text);
-    const res = await fetch("/api/entries", {
+    const res = await fetch(apiUrl("api/entries"), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ name, text }),
@@ -170,12 +195,17 @@
   }
 
   async function removeShared(id) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    let carried = [];
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await readSharedNotes();
-      if (!current.some((entry) => entry.id === id)) return;
-      await writeShared(current.filter((entry) => entry.id !== id));
+      if (!current.some((entry) => entry.id === id) && !carried.length) return;
+      const merged = packShared([...carried, ...current]).filter((entry) => entry.id !== id);
+      await writeShared(merged);
       const seen = await readSharedNotes();
-      if (!seen.some((entry) => entry.id === id)) return;
+      if (seen.some((entry) => entry.id === id)) continue;
+      const seenIds = new Set(seen.map((entry) => entry.id));
+      carried = merged.filter((entry) => !seenIds.has(entry.id));
+      if (!carried.length) return;
     }
     throw new Error("share");
   }
@@ -398,6 +428,7 @@
     sending = true;
     submitBtn.disabled = true;
     try {
+      await ready;
       let createdId = "";
       if (savedOnServer) {
         const created = await postEntry(name, text);
@@ -476,7 +507,7 @@
         saveLocal(loadLocal().filter((entry) => entry.id !== id));
         entries = await fetchEntries();
       } else if (savedOnServer) {
-        const res = await fetch(`/api/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+        const res = await fetch(apiUrl(`api/entries/${encodeURIComponent(id)}`), { method: "DELETE" });
         if (!res.ok) {
           live.textContent = "거두지 못했다.";
           return;
@@ -698,6 +729,6 @@
   applyCopy();
   render({ recenter: true });
   begin();
-  boot();
+  ready = boot();
   window.requestAnimationFrame(tick);
 })();
