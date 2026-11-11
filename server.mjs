@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, readdir } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const ROOTS = [...new Set([ROOT, process.cwd(), path.join(ROOT, "public"), path.join(process.cwd(), "public")])];
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "entries.json");
 const PORT = Number(process.env.PORT) || 8787;
@@ -31,6 +33,36 @@ const MIME = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
 };
+
+const assetUris = new Map();
+for (const root of ROOTS) {
+  let names = [];
+  try {
+    names = await readdir(path.join(root, "assets"));
+  } catch {
+    continue;
+  }
+  for (const name of names) {
+    const key = `assets/${name}`;
+    if (assetUris.has(key)) continue;
+    const type = MIME[path.extname(name).toLowerCase()];
+    if (!type || !type.startsWith("image/")) continue;
+    const bytes = await readFile(path.join(root, "assets", name));
+    assetUris.set(key, `data:${type};base64,${bytes.toString("base64")}`);
+  }
+  if (assetUris.size) break;
+}
+
+function inlineAssets(source) {
+  let text = source;
+  for (const key of [...assetUris.keys()].sort((a, b) => b.length - a.length)) {
+    const uri = assetUris.get(key);
+    text = text.split(`src="${key}"`).join(`src="${uri}"`);
+    text = text.split(`url("${key}")`).join(`url("${uri}")`);
+    text = text.split(`url('${key}')`).join(`url('${uri}')`);
+  }
+  return text;
+}
 
 function hashKey(key) {
   return createHash("sha256").update(key).digest("hex");
@@ -334,13 +366,26 @@ function publicFile(urlPath) {
     return null;
   }
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const full = path.resolve(ROOT, rel);
-  const relative = path.relative(ROOT, full);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
-  if (/^(data|node_modules|migrations)(\/|$)/.test(relative)) return null;
-  const ext = path.extname(full).toLowerCase();
-  if (!MIME[ext]) return null;
-  return { full, type: MIME[ext] };
+  const names = [rel];
+  const nested = rel.indexOf("assets/");
+  if (nested > 0) names.push(rel.slice(nested));
+  for (const root of ROOTS) {
+    for (const name of names) {
+      const full = path.resolve(root, name);
+      const relative = path.relative(root, full);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
+      if (/^(data|node_modules|migrations)(\/|$)/.test(relative)) continue;
+      const ext = path.extname(full).toLowerCase();
+      if (!MIME[ext]) continue;
+      try {
+        if (!statSync(full).isFile()) continue;
+      } catch {
+        continue;
+      }
+      return { full, type: MIME[ext], ext };
+    }
+  }
+  return null;
 }
 
 const store = await openStore();
@@ -392,13 +437,15 @@ const server = createServer(async (req, res) => {
       send(res, 404, { error: "없는 길이다." });
       return;
     }
-    const bytes = await readFile(file.full);
+    let body = await readFile(file.full);
+    if (file.ext === ".html" || file.ext === ".css") body = Buffer.from(inlineAssets(body.toString("utf8")), "utf8");
     res.writeHead(200, {
       "content-type": file.type,
+      "content-length": String(body.length),
       "x-content-type-options": "nosniff",
       "cache-control": file.type.startsWith("image/") || file.type.startsWith("font/") ? "public, max-age=86400" : "no-cache",
     });
-    res.end(req.method === "HEAD" ? undefined : bytes);
+    res.end(req.method === "HEAD" ? undefined : body);
   } catch (error) {
     const status = error && error.status ? error.status : 500;
     if (status === 500) console.error("garden request failed");
