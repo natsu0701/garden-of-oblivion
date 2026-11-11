@@ -1,6 +1,7 @@
 (() => {
   const DAY = 86400000;
   const KEY = "mangak-garden-guestbook-v1";
+  const SHARE_URL = "https://api.npoint.io/052ab9f1f404d7807d53";
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const narrowQuery = window.matchMedia("(max-width: 839px)");
 
@@ -42,6 +43,7 @@
   let returnFocus = invite;
   let readingEntry = null;
   let savedOnServer = false;
+  let shareMode = false;
   let entries = [];
   let sending = false;
 
@@ -87,7 +89,36 @@
     colophon.textContent = "저희 작품을 봐주셔서 감사합니다.";
   }
 
-  async function fetchEntries() {
+  function withSeeds(notes) {
+    const ids = new Set(notes.map((entry) => entry.id));
+    const seeds = SEEDS.filter((entry) => !ids.has(entry.id)).map((entry) => ({ ...entry, own: false }));
+    return [...notes, ...seeds].sort((a, b) => b.at - a.at);
+  }
+
+  async function readSharedNotes() {
+    const res = await fetch(`${SHARE_URL}?ts=${Date.now()}`, { cache: "no-store", headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error("share");
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : data && data.entries;
+    if (!Array.isArray(list)) return [];
+    return list.map((entry) => normalize({ ...entry, own: false })).filter((entry) => entry && !entry.id.startsWith("seed-"));
+  }
+
+  async function writeShared(notes) {
+    const payload = notes
+      .filter((entry) => entry && !String(entry.id).startsWith("seed-"))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 400)
+      .map(({ id, name, text, at }) => ({ id, name, text, at }));
+    const res = await fetch(SHARE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ entries: payload }),
+    });
+    if (!res.ok) throw new Error("share");
+  }
+
+  async function fetchServerEntries() {
     const res = await fetch("/api/entries", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
@@ -95,7 +126,32 @@
     return data.entries.map(normalize).filter(Boolean);
   }
 
+  async function fetchEntries() {
+    if (!shareMode) {
+      try {
+        return await fetchServerEntries();
+      } catch {
+        shareMode = true;
+      }
+    }
+    const ownIds = new Set(loadLocal().map((entry) => entry.id));
+    const notes = (await readSharedNotes()).map((entry) => ({ ...entry, own: ownIds.has(entry.id) }));
+    return withSeeds(notes);
+  }
+
+  async function postShared(name, text) {
+    const entry = { id: idOf(), name, text, at: Date.now(), own: true };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = (await readSharedNotes()).filter((item) => item.id !== entry.id);
+      await writeShared([entry, ...current]);
+      const seen = await readSharedNotes();
+      if (seen.some((item) => item.id === entry.id)) return entry;
+    }
+    throw new Error("share");
+  }
+
   async function postEntry(name, text) {
+    if (shareMode) return postShared(name, text);
     const res = await fetch("/api/entries", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
@@ -113,22 +169,43 @@
     return entry;
   }
 
+  async function removeShared(id) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await readSharedNotes();
+      if (!current.some((entry) => entry.id === id)) return;
+      await writeShared(current.filter((entry) => entry.id !== id));
+      const seen = await readSharedNotes();
+      if (!seen.some((entry) => entry.id === id)) return;
+    }
+    throw new Error("share");
+  }
+
+  function rememberOwn(entry, replacedId) {
+    const own = loadLocal().filter((item) => item.id !== entry.id && item.id !== replacedId && !(item.name === entry.name && item.text === entry.text));
+    own.push({ id: entry.id, name: entry.name, text: entry.text, at: entry.at });
+    saveLocal(own);
+  }
+
   async function boot() {
     try {
       let remote = await fetchEntries();
       const local = loadLocal();
       const remain = [];
       for (const entry of local) {
+        const already = remote.some((item) => item.id === entry.id || (item.name === entry.name && item.text === entry.text));
+        if (already) continue;
         try {
-          await postEntry(entry.name, entry.text);
+          const created = await postEntry(entry.name, entry.text);
+          if (shareMode) rememberOwn(created, entry.id);
         } catch {
           remain.push(entry);
         }
       }
-      saveLocal(remain);
+      if (!shareMode) saveLocal(remain);
       if (local.length) remote = await fetchEntries();
+      const ownIds = new Set(loadLocal().map((entry) => entry.id));
       const seen = new Set(remote.map((entry) => entry.id));
-      entries = [...remote, ...remain.filter((entry) => !seen.has(entry.id))].sort((a, b) => b.at - a.at);
+      entries = [...remote.map((entry) => ({ ...entry, own: entry.own || ownIds.has(entry.id) })), ...remain.filter((entry) => !seen.has(entry.id))].sort((a, b) => b.at - a.at);
       savedOnServer = true;
     } catch {
       savedOnServer = false;
@@ -324,7 +401,10 @@
       let createdId = "";
       if (savedOnServer) {
         const created = await postEntry(name, text);
+        if (shareMode) rememberOwn(created);
         entries = await fetchEntries();
+        const ownIds = new Set(loadLocal().map((entry) => entry.id));
+        entries = entries.map((entry) => ({ ...entry, own: entry.own || ownIds.has(entry.id) }));
         createdId = created.id;
       } else {
         const entry = { id: idOf(), name, text, at: Date.now(), own: true };
@@ -391,7 +471,11 @@
     const id = readingEntry.id;
     sending = true;
     try {
-      if (savedOnServer) {
+      if (savedOnServer && shareMode) {
+        await removeShared(id);
+        saveLocal(loadLocal().filter((entry) => entry.id !== id));
+        entries = await fetchEntries();
+      } else if (savedOnServer) {
         const res = await fetch(`/api/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
         if (!res.ok) {
           live.textContent = "거두지 못했다.";
