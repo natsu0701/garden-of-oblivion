@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOTS = [...new Set([ROOT, process.cwd(), path.join(ROOT, "public"), path.join(process.cwd(), "public")])];
+// Same pictures as the GitHub Pages garden. The app host can return a login page
+// for every file after the document, so those pictures are not requested from this host.
+const PUBLIC_ASSETS = "https://natsu0701.github.io/garden-of-oblivion/";
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "entries.json");
 const PORT = Number(process.env.PORT) || 8787;
@@ -53,15 +56,53 @@ for (const root of ROOTS) {
   if (assetUris.size) break;
 }
 
-function inlineAssets(source) {
+function replaceAssetRefs(source, valueFor) {
   let text = source;
   for (const key of [...assetUris.keys()].sort((a, b) => b.length - a.length)) {
-    const uri = assetUris.get(key);
-    text = text.split(`src="${key}"`).join(`src="${uri}"`);
-    text = text.split(`url("${key}")`).join(`url("${uri}")`);
-    text = text.split(`url('${key}')`).join(`url('${uri}')`);
+    const value = valueFor(key);
+    text = text.split(`src="${key}"`).join(`src="${value}"`);
+    text = text.split(`url("${key}")`).join(`url("${value}")`);
+    text = text.split(`url('${key}')`).join(`url('${value}')`);
   }
   return text;
+}
+
+function inlineAssets(source) {
+  return replaceAssetRefs(source, (key) => assetUris.get(key));
+}
+
+function pointAtPublicAssets(source) {
+  return replaceAssetRefs(source, (key) => new URL(key, PUBLIC_ASSETS).href);
+}
+
+let pageBody = null;
+
+async function loadPage() {
+  const htmlPath = statSafe(path.join(ROOT, "editable", "index.html"))
+    ? path.join(ROOT, "editable", "index.html")
+    : path.join(ROOT, "index.html");
+  const cssPath = statSafe(path.join(ROOT, "editable", "garden.css"))
+    ? path.join(ROOT, "editable", "garden.css")
+    : path.join(ROOT, "garden.css");
+  const [htmlRaw, cssRaw, jsRaw] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(cssPath, "utf8"),
+    readFile(path.join(ROOT, "garden.js"), "utf8"),
+  ]);
+  let html = pointAtPublicAssets(htmlRaw);
+  const css = pointAtPublicAssets(cssRaw);
+  const style = html.match(/<link rel="stylesheet" href="garden\.css"\s*\/?>/);
+  const script = html.match(/<script src="garden\.js(?:\?[^"]*)?" defer><\/script>/);
+  if (!style || !script) throw new Error("garden page is missing its style or script tag");
+  html = html.replace(style[0], () => `<style>\n${css}\n</style>`);
+  html = html.replace(script[0], () => `<script>\n${jsRaw}\n</script>`);
+  if (html.includes('href="garden.css"') || html.includes("garden.js")) {
+    throw new Error("garden page still asks this host for its style or script");
+  }
+  if (!html.includes("github.io/garden-of-oblivion/assets/")) {
+    throw new Error("garden page is missing its pictures");
+  }
+  pageBody = Buffer.from(html);
 }
 
 function hashKey(key) {
@@ -397,6 +438,7 @@ function publicFile(urlPath) {
 
 const store = await openStore();
 await store.init();
+await loadPage();
 
 const server = createServer(async (req, res) => {
   try {
@@ -435,6 +477,16 @@ const server = createServer(async (req, res) => {
       send(res, 404, { error: "없는 길이다." });
       return;
     }
+    if ((url.pathname === "/" || url.pathname === "/index.html") && (req.method === "GET" || req.method === "HEAD")) {
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": String(pageBody.length),
+        "x-content-type-options": "nosniff",
+        "cache-control": "no-store",
+      });
+      res.end(req.method === "HEAD" ? undefined : pageBody);
+      return;
+    }
     if (req.method !== "GET" && req.method !== "HEAD") {
       send(res, 405, { error: "허용되지 않은 방법이다." });
       return;
@@ -461,5 +513,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`garden listening on ${PORT} (${store.kind})`);
+  console.log(`garden listening on ${PORT} (${store.kind}, page ${pageBody.length} bytes)`);
 });
