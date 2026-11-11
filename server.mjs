@@ -358,6 +358,14 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function statSafe(full) {
+  try {
+    return statSync(full).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function publicFile(urlPath) {
   let pathname = "/";
   try {
@@ -365,7 +373,10 @@ function publicFile(urlPath) {
   } catch {
     return null;
   }
-  const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  let rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  if ((rel === "index.html" || rel === "garden.css") && statSafe(path.join(ROOT, "editable", rel))) {
+    rel = path.join("editable", rel);
+  }
   const names = [rel];
   const nested = rel.indexOf("assets/");
   if (nested > 0) names.push(rel.slice(nested));
@@ -377,11 +388,7 @@ function publicFile(urlPath) {
       if (/^(data|node_modules|migrations)(\/|$)/.test(relative)) continue;
       const ext = path.extname(full).toLowerCase();
       if (!MIME[ext]) continue;
-      try {
-        if (!statSync(full).isFile()) continue;
-      } catch {
-        continue;
-      }
+      if (!statSafe(full)) continue;
       return { full, type: MIME[ext], ext };
     }
   }
