@@ -7,9 +7,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOTS = [...new Set([ROOT, process.cwd(), path.join(ROOT, "public"), path.join(process.cwd(), "public")])];
-// Same pictures as the GitHub Pages garden. The app host can return a login page
-// for every file after the document, so those pictures are not requested from this host.
-const PUBLIC_ASSETS = "https://natsu0701.github.io/garden-of-oblivion/";
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "entries.json");
 const PORT = Number(process.env.PORT) || 8787;
@@ -71,16 +68,28 @@ function inlineAssets(source) {
   return replaceAssetRefs(source, (key) => assetUris.get(key));
 }
 
-function pointAtPublicAssets(source) {
-  return replaceAssetRefs(source, (key) => new URL(key, PUBLIC_ASSETS).href);
-}
-
 let pageBody = null;
 
+function assemblePage(htmlRaw, cssRaw, jsRaw) {
+  let html = inlineAssets(htmlRaw);
+  const css = inlineAssets(cssRaw);
+  const style = html.match(/<link rel="stylesheet" href="garden\.css"\s*\/?>/);
+  const script = html.match(/<script src="garden\.js(?:\?[^"]*)?" defer><\/script>/);
+  if (style) html = html.replace(style[0], () => `<style>\n${css}\n</style>`);
+  if (script) html = html.replace(script[0], () => `<script>\n${jsRaw}\n</script>`);
+  if (html.includes('href="garden.css"') || /src="garden\.js/.test(html)) {
+    throw new Error("garden page still asks this host for its style or script");
+  }
+  if (!html.includes("data:image/")) throw new Error("garden page is missing its pictures");
+  return html;
+}
+
 async function loadPage() {
-  const htmlPath = statSafe(path.join(ROOT, "editable", "index.html"))
-    ? path.join(ROOT, "editable", "index.html")
-    : path.join(ROOT, "index.html");
+  const htmlPath = statSafe(path.join(ROOT, "editable", "template.html"))
+    ? path.join(ROOT, "editable", "template.html")
+    : statSafe(path.join(ROOT, "editable", "index.html"))
+      ? path.join(ROOT, "editable", "index.html")
+      : path.join(ROOT, "index.html");
   const cssPath = statSafe(path.join(ROOT, "editable", "garden.css"))
     ? path.join(ROOT, "editable", "garden.css")
     : path.join(ROOT, "garden.css");
@@ -89,20 +98,7 @@ async function loadPage() {
     readFile(cssPath, "utf8"),
     readFile(path.join(ROOT, "garden.js"), "utf8"),
   ]);
-  let html = pointAtPublicAssets(htmlRaw);
-  const css = pointAtPublicAssets(cssRaw);
-  const style = html.match(/<link rel="stylesheet" href="garden\.css"\s*\/?>/);
-  const script = html.match(/<script src="garden\.js(?:\?[^"]*)?" defer><\/script>/);
-  if (!style || !script) throw new Error("garden page is missing its style or script tag");
-  html = html.replace(style[0], () => `<style>\n${css}\n</style>`);
-  html = html.replace(script[0], () => `<script>\n${jsRaw}\n</script>`);
-  if (html.includes('href="garden.css"') || html.includes("garden.js")) {
-    throw new Error("garden page still asks this host for its style or script");
-  }
-  if (!html.includes("github.io/garden-of-oblivion/assets/")) {
-    throw new Error("garden page is missing its pictures");
-  }
-  pageBody = Buffer.from(html);
+  pageBody = Buffer.from(assemblePage(htmlRaw, cssRaw, jsRaw));
 }
 
 function hashKey(key) {
