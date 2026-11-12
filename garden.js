@@ -147,7 +147,8 @@
     if (!shareMode) {
       try {
         return await fetchServerEntries();
-      } catch {
+      } catch (error) {
+        if (!staticHost) throw error;
         shareMode = true;
       }
     }
