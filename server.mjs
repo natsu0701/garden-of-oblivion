@@ -35,6 +35,14 @@ const MIME = {
   ".woff2": "font/woff2",
 };
 
+function assetFile(root, name) {
+  const embedded = path.join(root, "embed", name);
+  if (statSafe(embedded)) return embedded;
+  const original = path.join(root, "assets", name);
+  if (statSafe(original)) return original;
+  return null;
+}
+
 const assetUris = new Map();
 for (const root of ROOTS) {
   let names = [];
@@ -47,8 +55,9 @@ for (const root of ROOTS) {
     const key = `assets/${name}`;
     if (assetUris.has(key)) continue;
     const type = MIME[path.extname(name).toLowerCase()];
-    if (!type || !type.startsWith("image/")) continue;
-    const bytes = await readFile(path.join(root, "assets", name));
+    const full = assetFile(root, name);
+    if (!type || !type.startsWith("image/") || !full) continue;
+    const bytes = await readFile(full);
     assetUris.set(key, `data:${type};base64,${bytes.toString("base64")}`);
   }
   if (assetUris.size) break;
@@ -81,7 +90,17 @@ function assemblePage(htmlRaw, cssRaw, jsRaw) {
   if (html.includes('href="garden.css"') || /src="garden\.js/.test(html)) {
     throw new Error("garden page still asks this host for its style or script");
   }
-  if (!html.includes("data:image/")) throw new Error("garden page is missing its pictures");
+  const left = [...html.matchAll(/(?:src|href)=["'](assets\/[^"']+)|url\((["']?)(assets\/[^"')]+)\2\)/g)].map(
+    (match) => match[1] || match[3]
+  );
+  if (left.length) {
+    throw new Error(`garden page still points at pictures this host answers with a web page: ${[...new Set(left)].join(", ")}`);
+  }
+  const pictures = html.match(/<img\b/g) || [];
+  const embedded = html.match(/src="data:image\//g) || [];
+  if (pictures.length < 8 || embedded.length < pictures.length) {
+    throw new Error("garden page is missing its pictures");
+  }
   return html;
 }
 
