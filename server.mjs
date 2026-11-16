@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir, rename, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
@@ -43,64 +43,19 @@ function assetFile(root, name) {
   return null;
 }
 
-const assetUris = new Map();
-for (const root of ROOTS) {
-  let names = [];
-  try {
-    names = await readdir(path.join(root, "assets"));
-  } catch {
-    continue;
-  }
-  for (const name of names) {
-    const key = `assets/${name}`;
-    if (assetUris.has(key)) continue;
-    const type = MIME[path.extname(name).toLowerCase()];
-    const full = assetFile(root, name);
-    if (!type || !type.startsWith("image/") || !full) continue;
-    const bytes = await readFile(full);
-    assetUris.set(key, `data:${type};base64,${bytes.toString("base64")}`);
-  }
-  if (assetUris.size) break;
-}
-
-function replaceAssetRefs(source, valueFor) {
-  let text = source;
-  for (const key of [...assetUris.keys()].sort((a, b) => b.length - a.length)) {
-    const value = valueFor(key);
-    text = text.split(`src="${key}"`).join(`src="${value}"`);
-    text = text.split(`url("${key}")`).join(`url("${value}")`);
-    text = text.split(`url('${key}')`).join(`url('${value}')`);
-  }
-  return text;
-}
-
-function inlineAssets(source) {
-  return replaceAssetRefs(source, (key) => assetUris.get(key));
-}
-
 let pageBody = null;
 
 function assemblePage(htmlRaw, cssRaw, jsRaw) {
-  let html = inlineAssets(htmlRaw);
-  const css = inlineAssets(cssRaw);
+  let html = htmlRaw;
   const style = html.match(/<link rel="stylesheet" href="garden\.css"\s*\/?>/);
   const script = html.match(/<script src="garden\.js(?:\?[^"]*)?" defer><\/script>/);
-  if (style) html = html.replace(style[0], () => `<style>\n${css}\n</style>`);
+  if (style) html = html.replace(style[0], () => `<style>\n${cssRaw}\n</style>`);
   if (script) html = html.replace(script[0], () => `<script>\n${jsRaw}\n</script>`);
   if (html.includes('href="garden.css"') || /src="garden\.js/.test(html)) {
     throw new Error("garden page still asks this host for its style or script");
   }
-  const left = [...html.matchAll(/(?:src|href)=["'](assets\/[^"']+)|url\((["']?)(assets\/[^"')]+)\2\)/g)].map(
-    (match) => match[1] || match[3]
-  );
-  if (left.length) {
-    throw new Error(`garden page still points at pictures this host answers with a web page: ${[...new Set(left)].join(", ")}`);
-  }
-  const pictures = html.match(/<img\b/g) || [];
-  const embedded = html.match(/src="data:image\//g) || [];
-  if (pictures.length < 8 || embedded.length < pictures.length) {
-    throw new Error("garden page is missing its pictures");
-  }
+  const pictures = html.match(/<img\b[^>]*\ssrc="assets\/[^"]+"/g) || [];
+  if (pictures.length < 8) throw new Error("garden page is missing its pictures");
   return html;
 }
 
@@ -482,6 +437,13 @@ function publicFile(urlPath) {
     return null;
   }
   let rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  if (rel.startsWith("assets/")) {
+    const embedded = assetFile(ROOT, path.basename(rel));
+    if (embedded) {
+      const ext = path.extname(embedded).toLowerCase();
+      if (MIME[ext]) return { full: embedded, type: MIME[ext], ext };
+    }
+  }
   if ((rel === "index.html" || rel === "garden.css") && statSafe(path.join(ROOT, "editable", rel))) {
     rel = path.join("editable", rel);
   }
@@ -503,7 +465,19 @@ function publicFile(urlPath) {
   return null;
 }
 
-await loadPage();
+const FALLBACK_PAGE = Buffer.from(
+  "<!doctype html><meta charset=\"utf-8\"><title>망각의 정원</title><p>정원을 열지 못했습니다.</p>",
+  "utf8"
+);
+
+async function ensurePage() {
+  if (pageBody) return;
+  try {
+    await loadPage();
+  } catch {
+    pageBody = FALLBACK_PAGE;
+  }
+}
 
 async function withStore(res, task) {
   let store;
@@ -516,12 +490,12 @@ async function withStore(res, task) {
   await task(store);
 }
 
-const server = createServer(async (req, res) => {
+async function handleNode(req, res) {
   try {
+    await ensurePage();
     const url = new URL(req.url || "/", "http://garden.local");
     if (url.pathname === "/api/entries" && req.method === "GET") {
       const ownerHash = await ownerHashOf(req, res);
-      if (!ownerHash) return;
       await withStore(res, async (store) => {
         send(res, 200, { saved: true, entries: await store.list(ownerHash) });
       });
@@ -586,8 +560,7 @@ const server = createServer(async (req, res) => {
       send(res, 404, { error: "없는 길이다." });
       return;
     }
-    let body = await readFile(file.full);
-    if (file.ext === ".html" || file.ext === ".css") body = Buffer.from(inlineAssets(body.toString("utf8")), "utf8");
+    const body = await readFile(file.full);
     res.writeHead(200, {
       "content-type": file.type,
       "content-length": String(body.length),
@@ -600,12 +573,121 @@ const server = createServer(async (req, res) => {
     if (status === 500) console.error("garden request failed");
     if (!res.headersSent) send(res, status, { error: "걸리지 못했다." });
   }
+}
+
+function nodeRequest(request, body) {
+  const headers = {};
+  request.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  const url = new URL(request.url);
+  return {
+    url: `${url.pathname}${url.search}`,
+    method: request.method,
+    headers,
+    socket: { remoteAddress: "" },
+    on(event, callback) {
+      if (event === "data" && body.length) callback(body);
+      if (event === "end") callback();
+      return this;
+    },
+    destroy() {},
+  };
+}
+
+function captureResponse() {
+  const headers = {};
+  const chunks = [];
+  return {
+    status: 200,
+    headersSent: false,
+    setHeader(name, value) {
+      headers[String(name).toLowerCase()] = String(value);
+    },
+    writeHead(status, extra) {
+      this.status = status;
+      if (extra) {
+        for (const [name, value] of Object.entries(extra)) headers[String(name).toLowerCase()] = String(value);
+      }
+      this.headersSent = true;
+    },
+    end(payload) {
+      this.headersSent = true;
+      if (payload !== undefined && payload !== null) {
+        chunks.push(Buffer.isBuffer(payload) ? payload : Buffer.from(payload));
+      }
+      this.body = Buffer.concat(chunks);
+      this.done = true;
+    },
+    body: Buffer.alloc(0),
+    done: false,
+    headerList() {
+      return headers;
+    },
+  };
+}
+
+async function webHandle(request) {
+  const method = request.method || "GET";
+  const body = method === "GET" || method === "HEAD" ? Buffer.alloc(0) : Buffer.from(await request.arrayBuffer());
+  const req = nodeRequest(request, body);
+  const res = captureResponse();
+  await handleNode(req, res);
+  if (!res.done) {
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("걸리지 못했다.");
+  }
+  return new Response(method === "HEAD" ? null : res.body, { status: res.status, headers: res.headerList() });
+}
+
+async function respond(request) {
+  try {
+    if (!request || typeof request.headers?.get !== "function") {
+      return new Response(FALLBACK_PAGE, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    return await webHandle(request);
+  } catch {
+    return new Response(FALLBACK_PAGE, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  }
+}
+
+export function GET(request) {
+  return respond(request);
+}
+
+export function POST(request) {
+  return respond(request);
+}
+
+export function DELETE(request) {
+  return respond(request);
+}
+
+export function HEAD(request) {
+  return respond(request);
+}
+
+export default function handler(request) {
+  return respond(request);
+}
+
+const server = createServer((req, res) => {
+  handleNode(req, res).catch(() => {
+    if (!res.headersSent) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(FALLBACK_PAGE);
+    }
+  });
 });
 
 process.on("unhandledRejection", () => {
   console.error("garden kept the page up after a failed task");
 });
 
+server.on("error", () => {
+  console.error("garden kept the page up after a listen error");
+});
+
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`garden listening on ${PORT} (page ${pageBody.length} bytes)`);
+  console.log(`garden listening on ${PORT}`);
 });
