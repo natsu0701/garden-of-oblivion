@@ -326,7 +326,7 @@
     readRemove.hidden = !entry.own;
     readRemove.closest(".acts").hidden = !entry.own;
     readRemove.dataset.armed = "";
-    readRemove.textContent = "거두어 가다";
+    readRemove.textContent = "삭제";
     document.body.classList.add("is-reading");
     reading.showModal();
     $("read-close").focus();
@@ -425,7 +425,7 @@
     if (!readingEntry || !readingEntry.own || sending) return;
     if (readRemove.dataset.armed !== "1") {
       readRemove.dataset.armed = "1";
-      readRemove.textContent = "정말 거둔다";
+      readRemove.textContent = "삭제하시겠습니까?";
       return;
     }
     const id = readingEntry.id;
