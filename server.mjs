@@ -38,10 +38,10 @@ const MIME = {
 };
 
 function assetFile(root, name) {
-  const embedded = path.join(root, "embed", name);
-  if (statSafe(embedded)) return embedded;
   const original = path.join(root, "assets", name);
   if (statSafe(original)) return original;
+  const embedded = path.join(root, "embed", name);
+  if (statSafe(embedded)) return embedded;
   return null;
 }
 
