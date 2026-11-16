@@ -118,7 +118,7 @@
   async function postEntry(name, text) {
     const res = await fetch(apiUrl("api/entries"), {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
+      headers: { "content-type": "application/json", accept: "application/json", "x-garden-request": "1" },
       body: JSON.stringify({ name, text }),
     });
     if (res.status === 429) {
@@ -425,7 +425,10 @@
     sending = true;
     try {
       if (savedOnServer) {
-        const res = await fetch(apiUrl(`api/entries/${encodeURIComponent(id)}`), { method: "DELETE" });
+        const res = await fetch(apiUrl(`api/entries/${encodeURIComponent(id)}`), {
+          method: "DELETE",
+          headers: { accept: "application/json", "x-garden-request": "1" },
+        });
         if (!res.ok) {
           live.textContent = "거두지 못했다.";
           return;

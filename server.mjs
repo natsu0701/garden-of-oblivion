@@ -328,13 +328,41 @@ async function openStore() {
   return createPgStore(pool);
 }
 
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || "").split(";")) {
+    const index = part.indexOf("=");
+    if (index === -1) continue;
+    out[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return out;
+}
+
+function visitorKey(req, res) {
+  const current = parseCookies(req.headers.cookie).garden_visitor;
+  if (/^[a-f0-9]{64}$/.test(current || "")) return current;
+  const key = randomBytes(32).toString("hex");
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `garden_visitor=${key}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000${secure}`);
+  return key;
+}
+
+function fromThisPage(req) {
+  if (req.headers["x-garden-request"] !== "1") return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 async function ownerHashOf(req, res) {
   const identity = await getIdentity(req);
-  if (!identity || identity.verified !== true || !identity.sub) {
-    send(res, 401, { error: "들어온 사람을 알 수 없다." });
-    return null;
-  }
-  return hashKey(String(identity.sub));
+  if (identity && identity.verified === true && identity.sub) return hashKey(`person:${identity.sub}`);
+  return hashKey(`visitor:${visitorKey(req, res)}`);
 }
 
 function clientIp(req) {
@@ -453,8 +481,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/entries" && req.method === "POST") {
+      if (!fromThisPage(req)) {
+        send(res, 403, { error: "이 정원에서만 걸 수 있다." });
+        return;
+      }
       const ownerHash = await ownerHashOf(req, res);
-      if (!ownerHash) return;
       if (limited(`visitor:${ownerHash}`, 8, 10 * 60 * 1000) || limited(`ip:${clientIp(req)}`, 20, 10 * 60 * 1000)) {
         send(res, 429, { error: "잠시 뒤에 다시 걸어 두어라." });
         return;
@@ -472,8 +503,11 @@ const server = createServer(async (req, res) => {
     }
     const removal = url.pathname.match(/^\/api\/entries\/([a-zA-Z0-9-]{8,80})$/);
     if (removal && req.method === "DELETE") {
+      if (!fromThisPage(req)) {
+        send(res, 403, { error: "이 정원에서만 거둘 수 있다." });
+        return;
+      }
       const ownerHash = await ownerHashOf(req, res);
-      if (!ownerHash) return;
       const removed = await store.remove({ id: removal[1], ownerHash });
       send(res, removed ? 200 : 404, removed ? { ok: true } : { error: "거둘 수 없는 말이다." });
       return;
