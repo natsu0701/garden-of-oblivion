@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "server.mjs": {
-      "includeFiles": "{embed/**,assets/**,editable/**,cursor/**,garden.js,garden.css,index.html}"
-    }
-  }
-}

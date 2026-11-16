@@ -10,6 +10,7 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOTS = [...new Set([ROOT, process.cwd(), path.join(ROOT, "public"), path.join(process.cwd(), "public")])];
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "entries.json");
+const RATE_FILE = path.join(DATA_DIR, "rates.json");
 const PORT = Number(process.env.PORT) || 8787;
 const MAX_NOTES = 400;
 const DAY = 86400000;
@@ -186,7 +187,40 @@ function createFileStore() {
         return true;
       });
     },
+    async limited(key, max, windowMs) {
+      return enqueue(async () => limitHits(await readRates(), key, max, windowMs, writeRates));
+    },
   };
+}
+
+async function readRates() {
+  try {
+    const raw = JSON.parse(await readFile(RATE_FILE, "utf8"));
+    return Array.isArray(raw.hits) ? raw.hits : [];
+  } catch (error) {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeRates(hits) {
+  await mkdir(DATA_DIR, { recursive: true });
+  const tmp = `${RATE_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify({ hits }), "utf8");
+  await rename(tmp, RATE_FILE);
+}
+
+async function limitHits(hits, key, max, windowMs, write) {
+  const now = Date.now();
+  const kept = hits.filter((hit) => hit && now - Number(hit.at) < windowMs);
+  const recent = kept.filter((hit) => hit.key === key);
+  if (recent.length >= max) {
+    await write(kept.slice(-5000));
+    return true;
+  }
+  kept.push({ key, at: now });
+  await write(kept.slice(-5000));
+  return false;
 }
 
 function createPgStore(pool) {
@@ -205,6 +239,15 @@ function createPgStore(pool) {
       `);
       await pool.query(`
         CREATE INDEX IF NOT EXISTS entries_created_idx ON entries (created_at DESC)
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS rate_hits (
+          bucket TEXT NOT NULL,
+          at_ms BIGINT NOT NULL
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS rate_hits_bucket_idx ON rate_hits (bucket, at_ms)
       `);
       for (const row of seedRows()) {
         await pool.query(
@@ -272,6 +315,30 @@ function createPgStore(pool) {
       );
       return result.rowCount > 0;
     },
+    async limited(key, max, windowMs) {
+      const now = Date.now();
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(`DELETE FROM rate_hits WHERE at_ms < $1`, [now - windowMs]);
+        const count = await client.query(
+          `SELECT COUNT(*)::int AS n FROM rate_hits WHERE bucket = $1 AND at_ms >= $2`,
+          [key, now - windowMs]
+        );
+        if (count.rows[0].n >= max) {
+          await client.query("COMMIT");
+          return true;
+        }
+        await client.query(`INSERT INTO rate_hits (bucket, at_ms) VALUES ($1, $2)`, [key, now]);
+        await client.query("COMMIT");
+        return false;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
@@ -280,9 +347,9 @@ function databasePool(url) {
   return {
     connectionString: url,
     max: 3,
-    connectionTimeoutMillis: 8000,
-    idleTimeoutMillis: 20000,
-    ssl: local ? undefined : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 4000,
+    idleTimeoutMillis: 10000,
+    ssl: local ? undefined : { rejectUnauthorized: true },
   };
 }
 
@@ -324,55 +391,52 @@ function parseCookies(header) {
   return out;
 }
 
-function visitorKey(req, res) {
-  const current = parseCookies(req.headers.cookie).garden_visitor;
-  if (/^[a-f0-9]{64}$/.test(current || "")) return current;
-  const key = randomBytes(32).toString("hex");
-  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `garden_visitor=${key}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000${secure}`);
-  return key;
+function cookieSuffix(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  return proto === "https" ? "; Secure" : "";
 }
 
-function fromThisPage(req) {
-  if (req.headers["x-garden-request"] !== "1") return false;
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  let originHost = "";
-  try {
-    originHost = new URL(origin).host.toLowerCase();
-  } catch {
-    return false;
+function ensureCookies(req, res) {
+  const cookies = parseCookies(req.headers.cookie);
+  const issued = [];
+  let visitor = cookies.garden_visitor;
+  if (!/^[a-f0-9]{64}$/.test(visitor || "")) {
+    visitor = randomBytes(32).toString("hex");
+    issued.push(`garden_visitor=${visitor}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${cookieSuffix(req)}`);
   }
-  const hosts = [req.headers["x-forwarded-host"], req.headers.host]
-    .flatMap((value) => String(value || "").split(","))
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  return hosts.includes(originHost) || originHost.endsWith(".apps.grok.bot");
+  let csrf = cookies.garden_csrf;
+  if (!/^[a-f0-9]{64}$/.test(csrf || "")) {
+    csrf = randomBytes(32).toString("hex");
+    issued.push(`garden_csrf=${csrf}; SameSite=Strict; Path=/; Max-Age=31536000${cookieSuffix(req)}`);
+  }
+  if (issued.length) res.setHeader("Set-Cookie", issued);
+  return { visitor, csrf };
+}
+
+function allowedWrite(req) {
+  const cookie = parseCookies(req.headers.cookie).garden_csrf || "";
+  const header = String(req.headers["x-garden-csrf"] || "");
+  if (!/^[a-f0-9]{64}$/.test(cookie) || cookie.length !== header.length) return false;
+  return timingSafeEqual(Buffer.from(cookie), Buffer.from(header));
 }
 
 async function ownerHashOf(req, res) {
-  const identity = await getIdentity(req);
-  if (identity && identity.verified === true && identity.sub) return hashKey(`person:${identity.sub}`);
-  return hashKey(`visitor:${visitorKey(req, res)}`);
+  const { visitor } = ensureCookies(req, res);
+  const presented = req.headers["x-cursor-identity-v2"] || req.headers["x-cursor-identity"];
+  if (presented) {
+    const identity = await getIdentity(req);
+    if (identity && identity.verified === true && identity.sub) return hashKey(`person:${identity.sub}`);
+  }
+  return hashKey(`visitor:${visitor}`);
 }
 
 function clientIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.socket.remoteAddress || "local";
-}
-
-const hits = new Map();
-
-function limited(key, max, windowMs) {
-  const now = Date.now();
-  const recent = (hits.get(key) || []).filter((at) => now - at < windowMs);
-  if (recent.length >= max) {
-    hits.set(key, recent);
-    return true;
-  }
-  recent.push(now);
-  hits.set(key, recent);
-  return false;
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]+$/i.test(part));
+  if (forwarded.length) return forwarded[forwarded.length - 1];
+  return req.socket?.remoteAddress || "local";
 }
 
 function readJson(req) {
@@ -492,6 +556,7 @@ async function withStore(res, task) {
 
 async function handleNode(req, res) {
   try {
+    ensureCookies(req, res);
     await ensurePage();
     const url = new URL(req.url || "/", "http://garden.local");
     if (url.pathname === "/api/entries" && req.method === "GET") {
@@ -502,15 +567,11 @@ async function handleNode(req, res) {
       return;
     }
     if (url.pathname === "/api/entries" && req.method === "POST") {
-      if (!fromThisPage(req)) {
+      if (!allowedWrite(req)) {
         send(res, 403, { error: "이 정원에서만 걸 수 있다." });
         return;
       }
       const ownerHash = await ownerHashOf(req, res);
-      if (limited(`visitor:${ownerHash}`, 8, 10 * 60 * 1000) || limited(`ip:${clientIp(req)}`, 20, 10 * 60 * 1000)) {
-        send(res, 429, { error: "잠시 뒤에 다시 걸어 두어라." });
-        return;
-      }
       const body = await readJson(req);
       const name = cleanField(body.name, 10);
       const text = cleanField(body.text, 60);
@@ -519,6 +580,10 @@ async function handleNode(req, res) {
         return;
       }
       await withStore(res, async (store) => {
+        if (await store.limited(`visitor:${ownerHash}`, 8, 10 * 60 * 1000) || await store.limited(`ip:${clientIp(req)}`, 20, 10 * 60 * 1000)) {
+          send(res, 429, { error: "잠시 뒤에 다시 걸어 두어라." });
+          return;
+        }
         const entry = await store.add({ name, text, ownerHash });
         send(res, 201, { entry });
       });
@@ -526,7 +591,7 @@ async function handleNode(req, res) {
     }
     const removal = url.pathname.match(/^\/api\/entries\/([a-zA-Z0-9-]{8,80})$/);
     if (removal && req.method === "DELETE") {
-      if (!fromThisPage(req)) {
+      if (!allowedWrite(req)) {
         send(res, 403, { error: "이 정원에서만 거둘 수 있다." });
         return;
       }
@@ -601,8 +666,14 @@ function captureResponse() {
   return {
     status: 200,
     headersSent: false,
+    cookies: [],
     setHeader(name, value) {
-      headers[String(name).toLowerCase()] = String(value);
+      const key = String(name).toLowerCase();
+      if (key === "set-cookie") {
+        this.cookies = (Array.isArray(value) ? value : [value]).map(String);
+        return;
+      }
+      headers[key] = String(value);
     },
     writeHead(status, extra) {
       this.status = status;
@@ -622,7 +693,10 @@ function captureResponse() {
     body: Buffer.alloc(0),
     done: false,
     headerList() {
-      return headers;
+      const out = new Headers();
+      for (const [key, value] of Object.entries(headers)) out.set(key, value);
+      for (const cookie of this.cookies) out.append("set-cookie", cookie);
+      return out;
     },
   };
 }
@@ -651,23 +725,34 @@ async function respond(request) {
   }
 }
 
-export function GET(request) {
+export async function GET(request) {
   return respond(request);
 }
 
-export function POST(request) {
+export async function POST(request) {
   return respond(request);
 }
 
-export function DELETE(request) {
+export async function DELETE(request) {
   return respond(request);
 }
 
-export function HEAD(request) {
+export async function HEAD(request) {
   return respond(request);
 }
 
-export default function handler(request) {
+export default async function handler(request, response) {
+  if (response && typeof response.writeHead === "function") {
+    try {
+      await handleNode(request, response);
+    } catch {
+      if (!response.headersSent) {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(FALLBACK_PAGE);
+      }
+    }
+    return;
+  }
   return respond(request);
 }
 
@@ -684,6 +769,8 @@ process.on("unhandledRejection", () => {
   console.error("garden kept the page up after a failed task");
 });
 
+server.requestTimeout = 8000;
+server.headersTimeout = 9000;
 server.on("error", () => {
   console.error("garden kept the page up after a listen error");
 });

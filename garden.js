@@ -101,8 +101,15 @@
     return [...notes, ...seeds].sort((a, b) => b.at - a.at);
   }
 
+  function csrfHeaders(extra) {
+    const headers = { accept: "application/json", ...extra };
+    const match = document.cookie.match(/(?:^|;\s*)garden_csrf=([a-f0-9]{64})/);
+    if (match) headers["x-garden-csrf"] = match[1];
+    return headers;
+  }
+
   async function fetchServerEntries() {
-    const res = await fetch(apiUrl("api/entries"), { headers: { accept: "application/json" } });
+    const res = await fetch(apiUrl("api/entries"), { headers: csrfHeaders() });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
     if (!data || data.saved !== true || !Array.isArray(data.entries)) throw new Error("shape");
@@ -118,7 +125,7 @@
   async function postEntry(name, text) {
     const res = await fetch(apiUrl("api/entries"), {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json", "x-garden-request": "1" },
+      headers: csrfHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ name, text }),
     });
     if (res.status === 429) {
@@ -427,7 +434,7 @@
       if (savedOnServer) {
         const res = await fetch(apiUrl(`api/entries/${encodeURIComponent(id)}`), {
           method: "DELETE",
-          headers: { accept: "application/json", "x-garden-request": "1" },
+          headers: csrfHeaders(),
         });
         if (!res.ok) {
           live.textContent = "거두지 못했다.";
