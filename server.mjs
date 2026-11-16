@@ -320,12 +320,43 @@ function createPgStore(pool) {
   };
 }
 
+function databasePool(url) {
+  const local = /\/\/(?:[^@/]*@)?(localhost|127\.0\.0\.1)(?::|\/|$)/.test(url);
+  return {
+    connectionString: url,
+    max: 3,
+    connectionTimeoutMillis: 8000,
+    idleTimeoutMillis: 20000,
+    ssl: local ? undefined : { rejectUnauthorized: false },
+  };
+}
+
 async function openStore() {
   const url = process.env.DATABASE_URL;
   if (!url) return createFileStore();
   const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: url, max: 5 });
-  return createPgStore(pool);
+  const pool = new pg.Pool(databasePool(url));
+  pool.on("error", () => {});
+  const store = createPgStore(pool);
+  try {
+    await store.init();
+  } catch {
+    await pool.end().catch(() => {});
+    throw new Error("database unavailable");
+  }
+  return store;
+}
+
+let storeTask = null;
+
+function readyStore() {
+  if (!storeTask) {
+    storeTask = openStore().catch((error) => {
+      storeTask = null;
+      throw error;
+    });
+  }
+  return storeTask;
 }
 
 function parseCookies(header) {
@@ -351,12 +382,17 @@ function fromThisPage(req) {
   if (req.headers["x-garden-request"] !== "1") return false;
   const origin = req.headers.origin;
   if (!origin) return true;
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  let originHost = "";
   try {
-    return new URL(origin).host === host;
+    originHost = new URL(origin).host.toLowerCase();
   } catch {
     return false;
   }
+  const hosts = [req.headers["x-forwarded-host"], req.headers.host]
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return hosts.includes(originHost) || originHost.endsWith(".apps.grok.bot");
 }
 
 async function ownerHashOf(req, res) {
@@ -467,9 +503,18 @@ function publicFile(urlPath) {
   return null;
 }
 
-const store = await openStore();
-await store.init();
 await loadPage();
+
+async function withStore(res, task) {
+  let store;
+  try {
+    store = await readyStore();
+  } catch {
+    send(res, 503, { error: "기록을 지금 열 수 없다." });
+    return;
+  }
+  await task(store);
+}
 
 const server = createServer(async (req, res) => {
   try {
@@ -477,7 +522,9 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/entries" && req.method === "GET") {
       const ownerHash = await ownerHashOf(req, res);
       if (!ownerHash) return;
-      send(res, 200, { saved: true, entries: await store.list(ownerHash) });
+      await withStore(res, async (store) => {
+        send(res, 200, { saved: true, entries: await store.list(ownerHash) });
+      });
       return;
     }
     if (url.pathname === "/api/entries" && req.method === "POST") {
@@ -497,8 +544,10 @@ const server = createServer(async (req, res) => {
         send(res, 400, { error: "아직 비어있는 항목이 있습니다." });
         return;
       }
-      const entry = await store.add({ name, text, ownerHash });
-      send(res, 201, { entry });
+      await withStore(res, async (store) => {
+        const entry = await store.add({ name, text, ownerHash });
+        send(res, 201, { entry });
+      });
       return;
     }
     const removal = url.pathname.match(/^\/api\/entries\/([a-zA-Z0-9-]{8,80})$/);
@@ -508,8 +557,10 @@ const server = createServer(async (req, res) => {
         return;
       }
       const ownerHash = await ownerHashOf(req, res);
-      const removed = await store.remove({ id: removal[1], ownerHash });
-      send(res, removed ? 200 : 404, removed ? { ok: true } : { error: "거둘 수 없는 말이다." });
+      await withStore(res, async (store) => {
+        const removed = await store.remove({ id: removal[1], ownerHash });
+        send(res, removed ? 200 : 404, removed ? { ok: true } : { error: "거둘 수 없는 말이다." });
+      });
       return;
     }
     if (url.pathname.startsWith("/api/")) {
@@ -551,6 +602,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
+process.on("unhandledRejection", () => {
+  console.error("garden kept the page up after a failed task");
+});
+
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`garden listening on ${PORT} (${store.kind}, page ${pageBody.length} bytes)`);
+  console.log(`garden listening on ${PORT} (page ${pageBody.length} bytes)`);
 });
