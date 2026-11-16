@@ -5,6 +5,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getIdentity } from "./cursor/identity.js";
+import { pictures } from "./pictures.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOTS = [...new Set([ROOT, process.cwd(), path.join(ROOT, "public"), path.join(process.cwd(), "public")])];
@@ -46,17 +47,34 @@ function assetFile(root, name) {
 
 let pageBody = null;
 
+function applyPictures(source) {
+  let text = source;
+  const keys = Object.keys(pictures).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    const value = pictures[key];
+    text = text.split(`src="${key}"`).join(`src="${value}"`);
+    text = text.split(`url("${key}")`).join(`url("${value}")`);
+    text = text.split(`url('${key}')`).join(`url('${value}')`);
+  }
+  return text;
+}
+
 function assemblePage(htmlRaw, cssRaw, jsRaw) {
-  let html = htmlRaw;
+  let html = applyPictures(htmlRaw);
+  const css = applyPictures(cssRaw);
   const style = html.match(/<link rel="stylesheet" href="garden\.css"\s*\/?>/);
   const script = html.match(/<script src="garden\.js(?:\?[^"]*)?" defer><\/script>/);
-  if (style) html = html.replace(style[0], () => `<style>\n${cssRaw}\n</style>`);
+  if (style) html = html.replace(style[0], () => `<style>\n${css}\n</style>`);
   if (script) html = html.replace(script[0], () => `<script>\n${jsRaw}\n</script>`);
   if (html.includes('href="garden.css"') || /src="garden\.js/.test(html)) {
     throw new Error("garden page still asks this host for its style or script");
   }
-  const pictures = html.match(/<img\b[^>]*\ssrc="assets\/[^"]+"/g) || [];
-  if (pictures.length < 8) throw new Error("garden page is missing its pictures");
+  const left = [...html.matchAll(/(?:src|href)=["'](assets\/[^"']+)|url\((["']?)(assets\/[^"')]+)\2\)/g)].map(
+    (match) => match[1] || match[3]
+  );
+  if (left.length) throw new Error(`garden page is missing its pictures: ${[...new Set(left)].join(", ")}`);
+  const shown = html.match(/src="data:image\//g) || [];
+  if (shown.length < 8) throw new Error("garden page is missing its pictures");
   return html;
 }
 
